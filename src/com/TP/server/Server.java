@@ -10,65 +10,81 @@ public class Server {
 
     static {
         users.put("Miage", "Sepideh");
-
     }
 
     public static void main(String[] args) {
-        int port = 2121;  
+        int port = 2121;
 
         try (ServerSocket serverSocket = new ServerSocket(port)) {
-            System.out.println("Serveur est ici pour accepter des connexion sur le port " + port);
+            System.out.println("Serveur en attente de connexions sur le port " + port);
 
             while (true) {
-                Socket clientSocket = serverSocket.accept();  
+                Socket clientSocket = serverSocket.accept();
                 System.out.println("Client connecté : " + clientSocket.getInetAddress());
-                
-                new ClientHandler(clientSocket).start();
 
+                new ClientHandler(clientSocket).start();
             }
         } catch (IOException e) {
             e.printStackTrace();
         }
     }
-}
+
+    private static class ClientHandler extends Thread {
+        private final Socket clientSocket;
+        private BufferedReader reader;
+        private PrintWriter writer;
+
+        public ClientHandler(Socket clientSocket) {
+            this.clientSocket = clientSocket;
+        }
+
+        @Override
+        public void run() {
+            try {
+                reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
+                writer = new PrintWriter(clientSocket.getOutputStream(), true);
 
 
-static class ClientHandler extends Thread {
-    private Socket clientSocket;
+                String username = null;
+                String password = null;
+                String command;
 
-    public ClientHandler(Socket clientSocket) {
-        this.clientSocket = clientSocket;
-    }
-    
-public void run() {
-    try (
-        BufferedReader reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
-        PrintWriter writer = new PrintWriter(clientSocket.getOutputStream(), true)
-    ) {
-        writer.println("Entrez votre nom d'utilisateur : ");
-        String username = reader.readLine();  
+                while ((command = reader.readLine()) != null) {
+                    System.out.println("Command received: " + command);
 
-        writer.println("Entrez votre mot de passe : ");
-        String password = reader.readLine();  
+                    if (command.startsWith("USER ")) {
+                        username = command.substring(5).trim();
+                        System.out.println("Nom d'utilisateur reçu : " + username);
+                        writer.println("331 User name okay, need password.");
+                    } 
+                    else if (command.startsWith("PASS ")) {
+                        password = command.substring(5).trim();
 
-        System.out.println("Nom d'utilisateur : " + username);
-        System.out.println("Mot de passe : " + password);
-
-        writer.println("Nom d'utilisateur et mot de passe reçus.");
-
-    } catch (IOException e) {
-        e.printStackTrace();
-    } finally {
-        try {
-            clientSocket.close();  
-        } catch (IOException e) {
-            e.printStackTrace();
+                        if (username != null && users.containsKey(username) && users.get(username).equals(password)) {
+                            writer.println("230 Login successful.");
+                        } else {
+                            writer.println("530 Login incorrect.");
+                        }
+                    }
+                    else if (command.equals("QUIT")) {
+                        writer.println("221 Deconnexion.");
+                        break;
+                    }
+                    else {
+                        writer.println("502 Command not implemented.");
+                    }
+                }
+            } catch (IOException e) {
+                e.printStackTrace();
+            } finally {
+                try {
+                    if (clientSocket != null && !clientSocket.isClosed()) {
+                        clientSocket.close();
+                    }
+                } catch (IOException e) {
+                    e.printStackTrace();
+                }
+            }
         }
     }
-}
-
-	
-	
-	
-	
 }
