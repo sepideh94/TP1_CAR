@@ -9,27 +9,28 @@ public class Server {
     private static final Map<String, String> users = new HashMap<>();
 
     static {
-        users.put("Miage", "Sepideh");
+        users.put("Miage", "Sepideh"); 
     }
 
     public static void main(String[] args) {
         int port = 2121;
 
         try (ServerSocket serverSocket = new ServerSocket(port)) {
-            System.out.println("Serveur en attente de connexions sur le port " + port);
+            System.out.println("Serveur en attente d'une connexion sur le port " + port);
 
-            while (true) {
-                Socket clientSocket = serverSocket.accept();
-                System.out.println("Client connecté : " + clientSocket.getInetAddress());
+            Socket clientSocket = serverSocket.accept();
+            System.out.println("Client connecté : " + clientSocket.getInetAddress());
 
-                new ClientHandler(clientSocket).start();
-            }
+            new ClientHandler(clientSocket).run();
+
+            System.out.println("Serveur arrêté après déconnexion du client.");
         } catch (IOException e) {
+            System.err.println("Erreur serveur: " + e.getMessage());
             e.printStackTrace();
         }
     }
 
-    private static class ClientHandler extends Thread {
+    private static class ClientHandler {
         private final Socket clientSocket;
         private BufferedReader reader;
         private PrintWriter writer;
@@ -38,12 +39,12 @@ public class Server {
             this.clientSocket = clientSocket;
         }
 
-        @Override
         public void run() {
             try {
                 reader = new BufferedReader(new InputStreamReader(clientSocket.getInputStream()));
                 writer = new PrintWriter(clientSocket.getOutputStream(), true);
 
+                writer.println("220 service ready!");
 
                 String username = null;
                 String password = null;
@@ -61,29 +62,38 @@ public class Server {
                         password = command.substring(5).trim();
 
                         if (username != null && users.containsKey(username) && users.get(username).equals(password)) {
-                            writer.println("230 Login successful.");
+                            writer.println("230 Login successful. Welcome, " + username + "!");
                         } else {
                             writer.println("530 Login incorrect.");
                         }
-                    }
-                    else if (command.equals("QUIT")) {
-                        writer.println("221 Deconnexion.");
+                    } 
+                    else if (command.equalsIgnoreCase("QUIT")) {
+                        writer.println("221 Goodbye.");
                         break;
-                    }
+                    } 
                     else {
                         writer.println("502 Command not implemented.");
                     }
                 }
             } catch (IOException e) {
+                System.err.println("Erreur avec le client : " + e.getMessage());
                 e.printStackTrace();
             } finally {
-                try {
-                    if (clientSocket != null && !clientSocket.isClosed()) {
-                        clientSocket.close();
-                    }
-                } catch (IOException e) {
-                    e.printStackTrace();
+                cleanUp();
+            }
+        }
+
+        // Close the socket and other resources
+        private void cleanUp() {
+            try {
+                if (reader != null) reader.close();
+                if (writer != null) writer.close();
+                if (clientSocket != null && !clientSocket.isClosed()) {
+                    clientSocket.close();
+                    System.out.println("Connexion fermée.");
                 }
+            } catch (IOException e) {
+                System.err.println("Erreur lors de la fermeture des ressources : " + e.getMessage());
             }
         }
     }
