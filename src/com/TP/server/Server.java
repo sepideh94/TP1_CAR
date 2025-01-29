@@ -13,11 +13,10 @@ public class Server {
 
         int port = 2121;
 
-        ServerSocket serverSocket = new ServerSocket(port);
-        System.out.println("Server is running in directory: " + System.getProperty("user.dir"));
+        ServerSocket controlSocket = new ServerSocket(port);
         System.out.println("Server ready to accept connections on port " + port);
 
-        Socket socket = serverSocket.accept();
+        Socket socket = controlSocket.accept();
         InputStream input = socket.getInputStream();
         OutputStream output = socket.getOutputStream();
         Scanner scanner = new Scanner(input);
@@ -27,13 +26,11 @@ public class Server {
 
         boolean authenticated = false;
         String inputUser = null;
-        ServerSocket passiveServerSocket = null; 
-
+        
         while (scanner.hasNextLine()) {
-            String message = scanner.nextLine(); 
-            System.out.println("Received message: '" + message + "'");
+            String message = scanner.nextLine();
 
-            //  OPTS command for Windows
+            // Handle OPTS (special case for Windows clients)
             if (message.startsWith("OPTS")) {
                 writer.println("200 OPTS command ignored.");
                 continue;
@@ -42,7 +39,7 @@ public class Server {
             if (message.startsWith("USER")) {
                 inputUser = message.substring(5).trim();
                 if (USERNAME.equals(inputUser)) {
-                    writer.println("331 User name okay, need password.");
+                    writer.println("331 User name ok.");
                     System.out.println("USER " + USERNAME);
                 } else {
                     writer.println("430 Invalid username.");
@@ -55,7 +52,7 @@ public class Server {
                 String inputPass = message.substring(5).trim();
                 if (PASSWORD.equals(inputPass) && USERNAME.equals(inputUser)) {
                     authenticated = true;
-                    writer.println("230 User logged in, proceed.");
+                    writer.println("230 User logged in.");
                     System.out.println("PASS " + PASSWORD);
                 } else {
                     writer.println("430 Invalid password.");
@@ -65,74 +62,103 @@ public class Server {
             }
 
             if (message.equalsIgnoreCase("QUIT")) {
-                writer.println("221 Service closing control connection.");
+                writer.println("221 Service closing connection.");
                 System.out.println("QUIT");
                 break;
             }
 
-           
-            // get command is RETR in windows
-            if (authenticated && message.startsWith("RETR")) {
+            if (!authenticated) {
+                writer.println("530 Not logged in.");
+                continue;
+            }
+
+            if (message.startsWith("RETR")) {
                 String inputFile = message.substring(5).trim();
-                File file = new File(inputFile);
+                File file = new File(System.getProperty("user.dir"), inputFile);
+                System.out.println("RETR " + inputFile);
 
                 if (!file.exists() || !file.isFile()) {
                     writer.println("550 File not found.");
-                    System.out.println("File " + inputFile + " not found.");
-                    continue; }
-                
-                passiveServerSocket = new ServerSocket(0); 
-                int passivePort = passiveServerSocket.getLocalPort();
+                    continue;
+                }
 
-                String serverIp = InetAddress.getLocalHost().getHostAddress();
-                String[] ipParts = serverIp.split("\\.");
-
-                int p1 = passivePort / 256;
-                int p2 = passivePort % 256;
-
-                writer.println(String.format(
-                    "227 Entering Passive Mode (%s,%s,%s,%s,%d,%d)",
-                    ipParts[0], ipParts[1], ipParts[2], ipParts[3], p1, p2));
-                
-                System.out.println("PASV response sent with dynamic port: " + passivePort);
-
-                    writer.println("150 File status okay; about to open data connection.");//blocs here
-                    System.out.println("Starting file transfer for: " + inputFile);
-
-                   Socket dataSocket =  passiveServerSocket.accept(); 
-
-                    System.out.println("accepted");
-
-                    InputStream fileInput = new FileInputStream(file);
-                    OutputStream dataOutput = dataSocket.getOutputStream();
-
+                try (ServerSocket passiveServerSocket = new ServerSocket(0)) {
+                    int passivePort = passiveServerSocket.getLocalPort();
+                    writer.println("227 Entering Extended Passive Mode (|||" + passivePort + "|).\r\n");
                     
-                    int data; 
-                    while ((data = fileInput.read()) != -1) { 
-                        dataOutput.write(data); 
+                    Socket dataSocket = passiveServerSocket.accept();  
+
+                    try (InputStream fileInput = new FileInputStream(file);
+                         OutputStream dataOutput = dataSocket.getOutputStream()) {
+
+                        writer.println("150 Opening data connection.");
+                        
+                        byte[] buffer = new byte[4096];
+                        int bytesRead;
+                        while ((bytesRead = fileInput.read(buffer)) != -1) {
+                            dataOutput.write(buffer, 0, bytesRead);
+                        }
+
+                        dataOutput.flush();
+                        writer.println("226 Transfer complete.");
                     }
-
-                    writer.println("226 Transfer complete.");
-                    System.out.println("File " + inputFile + " successfully sent to the client.");
-
-                    if (passiveServerSocket != null && !passiveServerSocket.isClosed()) {
-                        passiveServerSocket.close();
-                        System.out.println("Passive server socket closed.");
-                    }
-
-                    continue;  
+                } catch (IOException e) {
+                    writer.println("550 Error transferring file.");
+                }
+                continue;
             }
 
+            if (message.startsWith("CWD")) {
+                String inputDir = message.substring(4).trim();
+                File dir = new File(inputDir);
 
-            if (!authenticated) {
-                writer.println("530 Not logged in.");
-            } else {
-                writer.println("502 Command not implemented.");
+                if (dir.exists() && dir.isDirectory()) {
+                    System.setProperty("user.dir", inputDir);
+                    writer.println("250 Directory successfully changed.");
+                    System.out.println("CWD " + inputDir);
+                } else {
+                    writer.println("550 Failed to change directory.");
+                }
+                continue;
             }
+
+            if (message.equalsIgnoreCase("LIST")) {
+                File currentDir = new File(System.getProperty("user.dir"));
+                File[] files = currentDir.listFiles();
+                System.out.println("LIST");
+
+                try (ServerSocket passiveServerSocket = new ServerSocket(0)) {
+                    int passivePort = passiveServerSocket.getLocalPort();
+                    writer.println("227 Entering Extended Passive Mode (|||" + passivePort + "|).\r\n");
+                    Socket dataSocket = passiveServerSocket.accept();
+
+                    try (PrintWriter dataWriter = new PrintWriter(dataSocket.getOutputStream(), true)) {
+                        writer.println("150 Opening data connection.");
+                        
+                        if (files != null && files.length > 0) {
+                            for (File file : files) {
+                                String fileType = file.isDirectory() ? "d" : "-";
+                                dataWriter.println(fileType + " " + file.getName());
+                            }
+                            writer.println("226 Directory listing complete.");
+                        } else {
+                            writer.println("550 No files in directory.");
+                        }
+                    }
+                } catch (IOException e) {
+                    writer.println("550 Error listing directory.");
+                }
+                continue;
+            }
+
+            else {
+                  writer.println("502 Command not implemented.");
+                  writer.flush();  }
         }
 
+
         socket.close();
-        serverSocket.close();
+        controlSocket.close();
+        scanner.close();
     }
 }
-
